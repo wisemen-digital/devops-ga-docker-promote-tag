@@ -1,0 +1,100 @@
+---
+name: Docker Promote Tag
+description: |
+  Used to "promote" a Docker image tag, such as promoting from "development" to
+  "test". Will calculate the "source" tag for a given target one. The default
+  mapping can be overriden, and you can always provide your own "source" to
+  override any mapping.
+
+  Example: the "source" for the "staging" tag (environment) is "test".
+
+  Some notes:
+  - Will fallback to docker hub registry (if none is provided)
+  - Image name will default to the current repository name
+  - Tag mapping is case insensitive
+inputs:
+  container-registry:
+    description: Container registry endpoint (fallback to Docker Hub)
+    required: false
+  container-registry-username:
+    description: Container registry username
+    required: true
+  container-registry-password:
+    description: Container registry password
+    required: true
+  image:
+    description: Image name (fallback to repository name)
+    required: false
+  source-tag:
+    description: Source (will calculate if empty)
+    required: false
+  target-tag:
+    description: Target environment
+    required: true
+  tag-map:
+    description: Tag map (JSON, fallback to default map)
+    required: false
+outputs:
+  source-tag:
+    description: Calculated source tag
+    value: ${{ steps.calculate.outputs.source }}
+  target-tag:
+    description: Target tag (normalized)
+    value: ${{ steps.calculate.outputs.target }}
+  manifest:
+    description: Image manifest (registry + image + tag)
+    value: ${{ env.registry }}/${{ env.image }}:${{ steps.calculate.outputs.target }}
+
+runs:
+  using: composite
+  steps:
+    # Prepare
+    - name: Prepare environment
+      shell: bash
+      run: |
+        echo "registry=${{ inputs.container-registry || 'docker.io' }}" >> "$GITHUB_ENV"
+        echo "image=`basename ${{ inputs.image || github.repository }}`" >> "$GITHUB_ENV"
+    - name: Calculate source
+      id: calculate
+      shell: bash
+      run: |
+        target=`echo ${{ inputs.target-tag }} | tr '[:upper:]' '[:lower:]'`
+        echo "target=$target" >> "$GITHUB_OUTPUT"
+
+        if [ ! -z "${{ inputs.source-tag }}" ]; then
+          echo "source=${{ inputs.source-tag }}" >> "$GITHUB_OUTPUT"
+        else
+          env_map='${{ inputs.tag-map || env.default-tag-map }}'
+          source=`echo $env_map | jq -r ".$target"`
+
+          if [ "$source" != "null" ]; then
+            echo "source=$source" >> "$GITHUB_OUTPUT"
+          else
+            echo "Unable to calculate source for ${{ inputs.target-tag }}." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+        fi
+      env:
+        default-tag-map: >  # Note that this is a JSON string
+          {
+            "development": "development",
+            "test": "development",
+            "staging": "test",
+            "production": "staging"
+          }
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    # Authenticate
+    - name: Login to custom registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.registry }}
+        username: ${{ inputs.container-registry-username }}
+        password: ${{ inputs.container-registry-password }}
+    # Re-tag
+    - name: Re-tag image
+      shell: bash
+      run: docker buildx imagetools create "$source_manifest" --tag "$target_manifest"
+      env:
+        source_manifest: ${{ env.registry }}/${{ env.image }}:${{ steps.calculate.outputs.source }}
+        target_manifest: ${{ env.registry }}/${{ env.image }}:${{ steps.calculate.outputs.target }}
