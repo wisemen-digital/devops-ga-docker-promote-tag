@@ -25,6 +25,9 @@ inputs:
   image:
     description: Image name (fallback to repository name)
     required: false
+  image-suffix:
+    description: Image suffix (fallback to empty)
+    required: false
   source-tag:
     description: Source (will calculate if empty)
     required: false
@@ -54,6 +57,7 @@ runs:
       run: |
         echo "registry=${{ inputs.container-registry || 'docker.io' }}" >> "$GITHUB_ENV"
         echo "image=`basename ${{ inputs.image || github.repository }}`" >> "$GITHUB_ENV"
+        if [ -n "${{ inputs.image-suffix }}" ]; then  echo "image_suffix=-${{ inputs.image-suffix }}" >> "$GITHUB_ENV"; fi
     - name: Calculate source
       id: calculate
       shell: bash
@@ -96,5 +100,5 @@ runs:
       shell: bash
       run: docker buildx imagetools create "$source_manifest" --tag "$target_manifest"
       env:
-        source_manifest: ${{ env.registry }}/${{ env.image }}:${{ steps.calculate.outputs.source }}
-        target_manifest: ${{ env.registry }}/${{ env.image }}:${{ steps.calculate.outputs.target }}
+        source_manifest: ${{ env.registry }}/${{ env.image }}${{ env.image_suffix }}:${{ steps.calculate.outputs.source }}
+        target_manifest: ${{ env.registry }}/${{ env.image }}${{ env.image_suffix }}:${{ steps.calculate.outputs.target }}
